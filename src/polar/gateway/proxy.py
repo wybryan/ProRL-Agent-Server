@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -53,6 +55,17 @@ class UpstreamTimeoutError(UpstreamError):
 
 class UpstreamTransportError(UpstreamError):
     """Raised for connection and transport failures."""
+
+
+@dataclass(frozen=True)
+class CompletionDetails:
+    """Exact upstream input/body alongside a separately normalized response."""
+
+    request: dict[str, Any]
+    raw_body: bytes
+    raw_response: dict[str, Any]
+    response: dict[str, Any]
+    headers: dict[str, str]
 
 
 class InferenceClient:
@@ -113,27 +126,35 @@ class InferenceClient:
 
     async def completion(self, request: dict[str, Any]) -> dict[str, Any]:
         """Non-streaming chat completion. Returns the full JSON response."""
-        await self._acquire_generation_slot()
-        client = await self._get_client()
-        from copy import deepcopy
+        return (await self.completion_details(request)).response
 
-        request_copy = deepcopy(request)
-        request_copy.pop("stream", None)
-        request_copy["stream"] = False
-        request_copy = self.engine.prepare_request(request_copy)
+    async def completion_details(self, request: dict[str, Any]) -> CompletionDetails:
+        """Capture before normalization; share the normal pause/drain generation barrier."""
+        await self._acquire_generation_slot()
         try:
+            client = await self._get_client()
+            request_copy = deepcopy(request)
+            request_copy.pop("stream", None)
+            request_copy["stream"] = False
+            request_copy = self.engine.prepare_request(request_copy)
             resp = await client.post(
                 "/v1/chat/completions",
                 json=request_copy,
                 headers={"Content-Type": "application/json"},
             )
+            await self._raise_for_status(resp)
+            raw_response = resp.json()
+            return CompletionDetails(
+                request=deepcopy(request_copy),
+                raw_body=bytes(resp.content),
+                raw_response=raw_response,
+                response=self.engine.normalize_response(deepcopy(raw_response)),
+                headers=dict(resp.headers),
+            )
         except httpx.RequestError as exc:
             raise self._translate_transport_error(exc) from exc
         finally:
             await self._release_generation_slot()
-
-        await self._raise_for_status(resp)
-        return self.engine.normalize_response(resp.json())
 
     async def _acquire_generation_slot(self) -> None:
         async with self._generation_condition:

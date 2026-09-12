@@ -9,21 +9,12 @@ from polar.gateway.engine import SGLangEngine
 from polar.gateway.proxy import InferenceClient
 
 
-def test_sglang_router_workers_are_used_for_direct_completion() -> None:
+def test_sglang_completion_uses_configured_router_and_preserves_token_extensions() -> None:
     requests: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append((request.url.host or "", request.url.path))
-        if request.url.path == "/workers":
-            return httpx.Response(
-                200,
-                json={
-                    "workers": [
-                        {"id": "w0", "url": "http://worker-a:15000", "worker_type": "regular"}
-                    ]
-                },
-            )
-        if request.url.host == "worker-a" and request.url.path == "/v1/chat/completions":
+        if request.url.host == "router" and request.url.path == "/v1/chat/completions":
             body = json.loads(request.content)
             assert body["return_prompt_token_ids"] is True
             assert body["return_meta_info"] is True
@@ -61,9 +52,9 @@ def test_sglang_router_workers_are_used_for_direct_completion() -> None:
     response = asyncio.run(run())
     choice = response["choices"][0]
 
-    assert ("router", "/workers") in requests
-    assert ("worker-a", "/v1/chat/completions") in requests
-    assert ("router", "/v1/chat/completions") not in requests
+    # Worker selection belongs to the configured router. The Slime router patch
+    # forwards the token extensions; bypassing it here loses its scheduling semantics.
+    assert requests == [("router", "/v1/chat/completions")]
     assert choice["input_token_ids"] == [1, 2, 3]
     assert choice["token_ids"] == [4]
     assert choice["logprobs"]["content"][0]["token_id"] == 4
