@@ -92,6 +92,8 @@ def _trajectory_key(sample: Any, sample_position: int) -> tuple[Any, tuple[Any, 
     group_idx = _key_value(getattr(sample, "group_index", None), -1)
     traj_idx = getattr(sample, "group_id", None)
     if traj_idx is None:
+        traj_idx = getattr(sample, "rollout_id", None)
+    if traj_idx is None:
         traj_idx = getattr(sample, "index", None)
     return group_idx, (group_idx, _key_value(traj_idx, sample_position))
 

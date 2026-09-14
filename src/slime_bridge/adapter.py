@@ -1,8 +1,9 @@
 """Convert Polar rollout results into Slime samples.
 
 Every trace in ``Trajectory.traces`` becomes one Slime ``Sample``.  All
-samples produced from the same session share ``Sample.group_id`` so Slime
-0.3.0's loss reducer counts the trajectory once even when it fans out into
+samples produced from the same session share ``Sample.group_id`` (0.3.0) or
+``Sample.rollout_id`` (0.3.2), so the loss reducer counts the trajectory once
+even when it fans out into
 multiple trace samples.  Builders own trace curation and per-token loss masks
 — the adapter does not infer trainable positions from bridge details. Traces
 that lack training tokens are dropped and represented as fully masked samples
@@ -160,7 +161,8 @@ def _build_sample(
     }
     polar_metadata.update(_scheduler_metadata(result, trace))
 
-    return Sample(
+    return _make_sample(
+        Sample,
         group_index=group_index,
         index=index,
         prompt=prompt_value,
@@ -206,7 +208,8 @@ def _build_dummy_sample(
         "placeholder": True,
     }
     polar_metadata.update(_scheduler_metadata(result, None))
-    return Sample(
+    return _make_sample(
+        Sample,
         group_index=group_index,
         index=index,
         prompt="",
@@ -323,3 +326,11 @@ def _load_sample_type() -> Any:
             "Ensure the Slime package is installed in the current environment."
         ) from exc
     return Sample
+
+
+def _make_sample(sample_type, **kwargs):
+    """Slime 0.3.0 group_id became rollout_id in 0.3.2; never lose episode grouping."""
+    fields = getattr(sample_type, "__dataclass_fields__", {})
+    if "rollout_id" in fields and "group_id" not in fields:
+        kwargs["rollout_id"] = kwargs.pop("group_id")
+    return sample_type(**kwargs)
